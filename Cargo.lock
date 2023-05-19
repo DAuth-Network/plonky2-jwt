@@ -511,7 +511,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "plonky2_sha256"
+name = "plonky2_jwt"
 version = "0.1.0"
 dependencies = [
  "anyhow",

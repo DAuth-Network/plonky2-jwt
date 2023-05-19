@@ -1,7 +1,7 @@
 use anyhow::Result;
 use log::LevelFilter;
 
-use plonky2_sha256::circuit::prove;
+use plonky2_jwt::circuit::prove;
 
 fn main() -> Result<()> {
     // Initialize logging
