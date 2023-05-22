@@ -1,6 +1,6 @@
 # plonky2-jwt-proof
 
-Run the demo using `cargo run`
+Run the demo `cargo run`
 
 The sample JWT in `src/main.rs` could be replace to any other JWT.
 
