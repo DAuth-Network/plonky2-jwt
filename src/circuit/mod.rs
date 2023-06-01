@@ -1,5 +1,3 @@
-use std::fs;
-
 pub mod inclusion;
 pub mod sha256;
 
@@ -8,9 +6,11 @@ use log::Level;
 
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::CircuitConfig;
+use plonky2::plonk::circuit_data::{CircuitConfig, VerifierCircuitData};
 use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 
+use plonky2::plonk::proof::CompressedProofWithPublicInputs;
+use plonky2::util::serialization::DefaultGateSerializer;
 use plonky2::util::timing::TimingTree;
 
 use self::sha256::make_sha256;
@@ -18,7 +18,7 @@ use crate::circuit::inclusion::make_inclusion_circut;
 use crate::utils::{array_to_bits, find_subsequence};
 use sha2::{Digest, Sha256};
 
-pub fn prove(jwt: &[u8], credential: &[u8]) -> Result<()> {
+pub fn prove(jwt: &[u8], credential: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut hasher = Sha256::new();
     hasher.update(jwt);
     let expected_hash = hasher.finalize();
@@ -78,28 +78,31 @@ pub fn prove(jwt: &[u8], credential: &[u8]) -> Result<()> {
 
     /* Serialize Circuit */
     let timing = TimingTree::new("serde_circuit", Level::Debug);
-    let common_circuit_data_serialized = serde_json::to_string(&data.common).unwrap();
-    fs::write("common_circuit_data.json", common_circuit_data_serialized)
-        .expect("Unable to write file");
-
-    let verifier_only_circuit_data_serialized = serde_json::to_string(&data.verifier_only).unwrap();
-    fs::write(
-        "verifier_only_circuit_data.json",
-        verifier_only_circuit_data_serialized,
-    )
-    .expect("Unable to write file");
+    let verifier_only_circuit_data_serialized = data.verifier_data().to_bytes(&DefaultGateSerializer).expect("Serialize circuit to work");
     timing.print();
 
     /* Prove */
     let timing = TimingTree::new("prove", Level::Debug);
     let proof = data.prove(pw)?;
+    let compressed_proof = data.compress(proof).expect("Compress proof to work");
     timing.print();
 
     /* Serde Prove */
-    let timing = TimingTree::new("serde_circuit", Level::Debug);
-    let proof_serialized = serde_json::to_string(&proof).unwrap();
-    fs::write("proof_with_public_inputs.json", proof_serialized).expect("Unable to write file");
+    let timing = TimingTree::new("serde_proof", Level::Debug);
+    let proof_serialized = compressed_proof.to_bytes();
     timing.print();
 
-    Ok(())
+    Ok((verifier_only_circuit_data_serialized, proof_serialized))
+}
+
+pub fn verify(verifier: &[u8], proof: &[u8]) -> Result<()> {
+    /* START VERIFIER CONSTRUCTION */
+    const D: usize = 2;
+    type C = PoseidonGoldilocksConfig;
+    type F = <C as GenericConfig<D>>::F;
+
+    let verifier = VerifierCircuitData::<F, C, D>::from_bytes(verifier.to_vec(), &DefaultGateSerializer).expect("Deserialize circuit to work");
+    let proof = CompressedProofWithPublicInputs::<F, C, D>::from_bytes(proof.to_vec(), &verifier.common).expect("Deserialize proof to work");
+
+    verifier.verify_compressed(proof)
 }

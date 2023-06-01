@@ -471,7 +471,6 @@ checksum = "9670a07f94779e00908f3e686eab508878ebb390ba6e604d3a284c00e8d0487b"
 [[package]]
 name = "plonky2"
 version = "0.1.3"
-source = "git+https://github.com/mir-protocol/plonky2#a492d3e1dba6abbb2cb1cce0b3a86a06ef9bae3e"
 dependencies = [
  "ahash",
  "anyhow",
@@ -518,7 +517,6 @@ dependencies = [
  "itertools",
  "log",
  "plonky2",
- "plonky2_u32",
  "rand",
  "serde",
  "serde_json",
@@ -532,17 +530,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "655cdcdb13c260cdb42b29b55247f2f66479d14342b6be3dc688efc54d3e24c4"
 dependencies = [
  "rayon",
-]
-
-[[package]]
-name = "plonky2_u32"
-version = "0.1.0"
-source = "git+https://github.com/mir-protocol/plonky2-u32#945ff60f6eff1028a2c71d64ad4d8b30fe62e159"
-dependencies = [
- "anyhow",
- "itertools",
- "num",
- "plonky2",
 ]
 
 [[package]]
