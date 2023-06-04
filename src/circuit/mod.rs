@@ -2,6 +2,7 @@
 pub mod fast_inclusion;
 // pub mod credential_hash;
 pub mod sha256;
+pub mod recursive;
 
 use anyhow::Result;
 use log::Level;
@@ -11,8 +12,9 @@ use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::{CircuitConfig, VerifierCircuitData};
 use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
-
-use plonky2::plonk::proof::CompressedProofWithPublicInputs;
+use plonky2::hash::hash_types::RichField;
+use plonky2::field::extension::Extendable;
+use plonky2::plonk::proof::ProofWithPublicInputs;
 use plonky2::util::serialization::DefaultGateSerializer;
 use plonky2::util::timing::TimingTree;
 
@@ -85,8 +87,6 @@ pub fn prove(jwt: &[u8], credential: &[u8]) -> Result<(Vec<u8>, Vec<u8>, [u8; 32
             builder.assert_zero(targets_sha256_credential.digest[i].target);
         }
     }
-    /* END CIRCUIT CONSTRUCTION */
-
     for i in 0..expected_hash_jwt.len() {
         builder.register_public_input(targets_sha256_jwt.digest[i].target);
     }
@@ -94,45 +94,48 @@ pub fn prove(jwt: &[u8], credential: &[u8]) -> Result<(Vec<u8>, Vec<u8>, [u8; 32
     for i in 0..expected_hash_credential.len() {
         builder.register_public_input(targets_sha256_credential.digest[i].target);
     }
+    /* END CIRCUIT CONSTRUCTION */
 
     log::info!(
         "Constructing inner proof with {} gates",
         builder.num_gates()
     );
+    let timing = TimingTree::new("build_circuit", Level::Info);
     let data = builder.build::<C>();
-
-    /* Serialize Circuit */
-    let timing = TimingTree::new("serde_circuit", Level::Debug);
-    let verifier_only_circuit_data_serialized = data.verifier_data().to_bytes(&DefaultGateSerializer).expect("Serialize circuit to work");
     timing.print();
 
-    log::info!("Verifier {}", serde_json::to_string(&data.verifier_only).unwrap());
+    /* Serialize Circuit */
+    let verifier_circuit_data_serialized = data.verifier_data().to_bytes(&DefaultGateSerializer).expect("Serialize circuit to work");
+
+    // log::info!("Verifier {}", serde_json::to_string(&data.verifier_only).unwrap());
     log::info!("Common {}", serde_json::to_string(&data.common).unwrap());
 
     /* Prove */
-    let timing = TimingTree::new("prove", Level::Debug);
+    let timing = TimingTree::new("prove", Level::Info);
     let proof = data.prove(pw)?;
-
-    let (jwt_sha256_hash, credential_sha256_hash) = extract_hashes_from_public_inputs(&proof.public_inputs);
-    let compressed_proof = data.compress(proof).expect("Compress proof to work");
     timing.print();
+    let (jwt_sha256_hash, credential_sha256_hash) = extract_hashes_from_public_inputs(&proof.public_inputs);
 
     /* Serde Prove */
-    let timing = TimingTree::new("serde_proof", Level::Debug);
-    let proof_serialized = compressed_proof.to_bytes();
-    timing.print();
+    let proof_serialized = proof.to_bytes();
 
-    Ok((verifier_only_circuit_data_serialized, proof_serialized, jwt_sha256_hash, credential_sha256_hash))
+    Ok((verifier_circuit_data_serialized, proof_serialized, jwt_sha256_hash, credential_sha256_hash))
 }
 
-pub fn verify(verifier: &[u8], proof: &[u8]) -> Result<()> {
+pub fn verify<
+    F: RichField + Extendable<D>,
+    C: GenericConfig<D, F = F>, // config to the wrapping circuit
+    const D: usize
+>(
+    verifier: &[u8], proof: &[u8]
+) -> Result<()> {
     /* START VERIFIER CONSTRUCTION */
-    const D: usize = 2;
-    type C = PoseidonGoldilocksConfig;
-    type F = <C as GenericConfig<D>>::F;
-
     let verifier = VerifierCircuitData::<F, C, D>::from_bytes(verifier.to_vec(), &DefaultGateSerializer).expect("Deserialize circuit to work");
-    let proof = CompressedProofWithPublicInputs::<F, C, D>::from_bytes(proof.to_vec(), &verifier.common).expect("Deserialize proof to work");
+    let proof = ProofWithPublicInputs::<F, C, D>::from_bytes(proof.to_vec(), &verifier.common).expect("Deserialize proof to work");
 
-    verifier.verify_compressed(proof)
+    let timing = TimingTree::new("verify", Level::Info);
+    let res = verifier.verify(proof);
+    timing.print();
+
+    res
 }
