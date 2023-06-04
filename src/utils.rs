@@ -1,3 +1,5 @@
+use plonky2::hash::hash_types::RichField;
+
 pub fn array_to_bits(bytes: &[u8]) -> Vec<bool> {
     let len = bytes.len();
     let mut ret = Vec::new();
@@ -39,6 +41,28 @@ pub fn bits_to_array(bits: &[bool]) -> Vec<u8> {
 
 pub fn find_subsequence(haystack: &[bool], needle: &[bool]) -> Option<usize> {
     haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+pub fn find_subsequence_u8(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+pub fn extract_hashes_from_public_inputs<F: RichField>(public_inputs: &[F]) -> ([u8; 32], [u8; 32]) {
+    let mut jwt_hash_bits = Vec::<bool>::new();
+    let mut credential_hash_bits = Vec::<bool>::new();
+
+    for i in 0..256 {
+        jwt_hash_bits.push(public_inputs[i] == F::ONE);
+        credential_hash_bits.push(public_inputs[i + 256] == F::ONE);
+    }
+
+    let jwt_hash = bits_to_array(&jwt_hash_bits);
+    let credential_hash = bits_to_array(&credential_hash_bits);
+
+    return (
+        jwt_hash.try_into().unwrap(),
+        credential_hash.try_into().unwrap(),
+    );
 }
 
 #[test]
