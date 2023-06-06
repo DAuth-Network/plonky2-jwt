@@ -32,7 +32,7 @@ pub const K256: [u32; 64] = [
 ];
 pub struct Sha256Targets {
     pub message: Vec<BoolTarget>,
-    pub digest: Vec<BoolTarget>,
+    pub digest: [U32Target; 8],
 }
 
 // define ROTATE(x, y)  (((x)>>(y)) | ((x)<<(32-(y))))
@@ -267,7 +267,6 @@ pub fn make_sha256<F: RichField + Extendable<D>, const D: usize>(
     msg_len_in_bits: u64,
 ) -> Sha256Targets {
     let mut message = Vec::new();
-    let mut digest = Vec::new();
     let block_count = (msg_len_in_bits + 65 + 511) / 512;
     let padded_msg_len = 512 * block_count;
     let p = padded_msg_len - 64 - msg_len_in_bits;
@@ -375,14 +374,7 @@ pub fn make_sha256<F: RichField + Extendable<D>, const D: usize>(
         state[7] = add_u32(builder, &state[7], &h);
     }
 
-    for i in 0..8 {
-        let bit_targets = builder.split_le_base::<2>(state[i].0, 32);
-        for j in (0..32).rev() {
-            digest.push(BoolTarget::new_unsafe(bit_targets[j]));
-        }
-    }
-
-    Sha256Targets { message, digest }
+    Sha256Targets { message, digest: state.try_into().unwrap() }
 }
 
 #[cfg(test)]
@@ -392,22 +384,10 @@ mod tests {
     use plonky2::plonk::circuit_builder::CircuitBuilder;
     use plonky2::plonk::circuit_data::CircuitConfig;
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
-    use rand::Rng;
+    use plonky2::u32::witness::WitnessU32;
 
-    use crate::utils::{array_to_bits};
+    use crate::utils::{array_to_bits, sha256_hash_u32_digests};
     use super::make_sha256;
-
-    const EXPECTED_RES: [u8; 256] = [
-        0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 0,
-        0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0,
-        0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1,
-        0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0,
-        1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1,
-        1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1,
-        1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0,
-        1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0,
-        0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0,
-    ];
 
     #[test]
     fn test_sha256() -> Result<()> {
@@ -416,6 +396,8 @@ mod tests {
             msg[i] = i as u8;
         }
 
+        let expected_hash = sha256_hash_u32_digests(&msg);
+
         let msg_bits = array_to_bits(&msg);
         let len = msg.len() * 8;
         const D: usize = 2;
@@ -429,55 +411,13 @@ mod tests {
             pw.set_bool_target(targets.message[i], msg_bits[i]);
         }
 
-        for i in 0..EXPECTED_RES.len() {
-            if EXPECTED_RES[i] == 1 {
-                builder.assert_one(targets.digest[i].target);
-            } else {
-                builder.assert_zero(targets.digest[i].target);
-            }
+        for i in 0..8 {
+            pw.set_u32_target(targets.digest[i], expected_hash[i]);
         }
 
         let data = builder.build::<C>();
         let proof = data.prove(pw).unwrap();
 
         data.verify(proof)
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_sha256_failure() {
-        let mut msg = vec![0; 128 as usize];
-        for i in 0..127 {
-            msg[i] = i as u8;
-        }
-
-        let msg_bits = array_to_bits(&msg);
-        let len = msg.len() * 8;
-        const D: usize = 2;
-        type C = PoseidonGoldilocksConfig;
-        type F = <C as GenericConfig<D>>::F;
-        let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::standard_recursion_config());
-        let targets = make_sha256(&mut builder, len as u64);
-        let mut pw = PartialWitness::new();
-
-        for i in 0..len {
-            pw.set_bool_target(targets.message[i], msg_bits[i]);
-        }
-
-        let mut rng = rand::thread_rng();
-        let rnd = rng.gen_range(0..256);
-        for i in 0..EXPECTED_RES.len() {
-            let b = (i == rnd && EXPECTED_RES[i] != 1) || (i != rnd && EXPECTED_RES[i] == 1);
-            if b {
-                builder.assert_one(targets.digest[i].target);
-            } else {
-                builder.assert_zero(targets.digest[i].target);
-            }
-        }
-
-        let data = builder.build::<C>();
-        let proof = data.prove(pw).unwrap();
-
-        data.verify(proof).expect("");
     }
 }

@@ -1,4 +1,5 @@
 use plonky2::hash::hash_types::RichField;
+use primitive_types::U256;
 
 pub fn array_to_bits(bytes: &[u8]) -> Vec<bool> {
     let len = bytes.len();
@@ -48,21 +49,79 @@ pub fn find_subsequence_u8(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 pub fn extract_hashes_from_public_inputs<F: RichField>(public_inputs: &[F]) -> ([u8; 32], [u8; 32]) {
-    let mut jwt_hash_bits = Vec::<bool>::new();
-    let mut credential_hash_bits = Vec::<bool>::new();
+    let mut jwt_hash_digest = Vec::new();
+    let mut credential_hash_digest = Vec::new();
 
-    for i in 0..256 {
-        jwt_hash_bits.push(public_inputs[i] == F::ONE);
-        credential_hash_bits.push(public_inputs[i + 256] == F::ONE);
+    let mut jwt_hash = Vec::new();
+    let mut credential_hash = Vec::new();
+
+    for i in 0..8 {
+        jwt_hash_digest.push(public_inputs[i].to_canonical_u64());
+        credential_hash_digest.push(public_inputs[i + 8].to_canonical_u64());
     }
 
-    let jwt_hash = bits_to_array(&jwt_hash_bits);
-    let credential_hash = bits_to_array(&credential_hash_bits);
+    for i in 0..8 {
+        for byte in &jwt_hash_digest[i].to_be_bytes()[4..8] {
+            jwt_hash.push(*byte);
+        }
+        for byte in &credential_hash_digest[i].to_be_bytes()[4..8] {
+            credential_hash.push(*byte);
+        }
+    }
 
     return (
         jwt_hash.try_into().unwrap(),
         credential_hash.try_into().unwrap(),
     );
+}
+
+pub fn sha256_hash_u32_digests(msg: &[u8]) -> [u32; 8] {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(msg);
+    let digest = hasher.finalize();
+
+    [
+        u32::from_be_bytes(digest[0..4].try_into().unwrap()),
+        u32::from_be_bytes(digest[4..8].try_into().unwrap()),
+        u32::from_be_bytes(digest[8..12].try_into().unwrap()),
+        u32::from_be_bytes(digest[12..16].try_into().unwrap()),
+        u32::from_be_bytes(digest[16..20].try_into().unwrap()),
+        u32::from_be_bytes(digest[20..24].try_into().unwrap()),
+        u32::from_be_bytes(digest[24..28].try_into().unwrap()),
+        u32::from_be_bytes(digest[28..32].try_into().unwrap()), 
+    ]
+}
+
+pub fn sha256_hash_u256_digests(msg: &[u8]) -> U256 {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(msg);
+    let digest = hasher.finalize();
+
+    U256::from_big_endian(&digest)
+}
+
+pub fn asset_u32_8_eq_u256(o: [u32; 8], n: U256) {
+    let mut dest = [0u8; 32];
+    n.to_big_endian(&mut dest[..]);
+
+    let orig = [
+        u32::from_be_bytes(dest[0..4].try_into().unwrap()),
+        u32::from_be_bytes(dest[4..8].try_into().unwrap()),
+        u32::from_be_bytes(dest[8..12].try_into().unwrap()),
+        u32::from_be_bytes(dest[12..16].try_into().unwrap()),
+        u32::from_be_bytes(dest[16..20].try_into().unwrap()),
+        u32::from_be_bytes(dest[20..24].try_into().unwrap()),
+        u32::from_be_bytes(dest[24..28].try_into().unwrap()),
+        u32::from_be_bytes(dest[28..32].try_into().unwrap()), 
+    ];
+
+    for i in 0..8 {
+        assert_eq!(orig[i], o[i]);
+    }
 }
 
 #[test]
@@ -88,3 +147,15 @@ fn find_smoke_test()  {
     let loc = find_subsequence(&x, &y);
     assert_eq!(loc, Some(8));
 }
+
+#[test]
+fn sha256_smoke_test() {
+    let x = b"something";
+    let result = sha256_hash_u32_digests(&x[..]);
+    let result_u256 = sha256_hash_u256_digests(&x[..]);
+    asset_u32_8_eq_u256(result, result_u256);
+    assert_eq!(result_u256, U256::from_str_radix("3fc9b689459d738f8c88a3a48aa9e33542016b7a4052e001aaa536fca74813cb", 16).unwrap());
+}
+
+// [1070184073, 1167946639, 2357765028, 2326389557, 1107389306, 1079173121, 2862954236, 2806518731]
+// 

@@ -8,6 +8,8 @@ use anyhow::Result;
 use log::Level;
 
 use plonky2::field::types::Field;
+use plonky2::fri::FriConfig;
+use plonky2::fri::reduction_strategies::FriReductionStrategy;
 use plonky2::iop::witness::{PartialWitness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2::plonk::circuit_data::{CircuitConfig, VerifierCircuitData};
@@ -15,25 +17,17 @@ use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 use plonky2::hash::hash_types::RichField;
 use plonky2::field::extension::Extendable;
 use plonky2::plonk::proof::ProofWithPublicInputs;
+use plonky2::u32::witness::WitnessU32;
 use plonky2::util::serialization::DefaultGateSerializer;
 use plonky2::util::timing::TimingTree;
 
 use self::sha256::make_sha256;
 use crate::circuit::fast_inclusion::make_fast_inclusion_circut;
-use crate::utils::{array_to_bits, find_subsequence_u8, extract_hashes_from_public_inputs};
-use sha2::{Digest, Sha256};
+use crate::utils::{array_to_bits, find_subsequence_u8, extract_hashes_from_public_inputs, sha256_hash_u32_digests};
 
-pub fn prove(jwt: &[u8], credential: &[u8]) -> Result<(Vec<u8>, Vec<u8>, [u8; 32], [u8; 32])> {
-    let mut hasher_jwt = Sha256::new();
-    hasher_jwt.update(jwt);
-    let expected_hash_jwt = hasher_jwt.finalize();
-    let expected_hash_jwt = array_to_bits(expected_hash_jwt.as_slice());
-
-    let mut hasher_credential = Sha256::new();
-    hasher_credential.update(credential);
-    let expected_hash_credential = hasher_credential.finalize();
-    let expected_hash_credential = array_to_bits(expected_hash_credential.as_slice());
-
+pub fn prove(jwt: &[u8], credential: &[u8], minimize_proof_size: bool) -> Result<(Vec<u8>, Vec<u8>, [u8; 32], [u8; 32])> {
+    let expected_hash_jwt = sha256_hash_u32_digests(jwt);
+    let expected_hash_credential = sha256_hash_u32_digests(credential);
 
     let jwt_bits = array_to_bits(jwt);
     let credential_bits = array_to_bits(credential);
@@ -48,7 +42,36 @@ pub fn prove(jwt: &[u8], credential: &[u8]) -> Result<(Vec<u8>, Vec<u8>, [u8; 32
     type C = PoseidonGoldilocksConfig;
     type F = <C as GenericConfig<D>>::F;
 
-    let config = CircuitConfig::standard_recursion_zk_config();
+    let config = if minimize_proof_size {
+        let standard_config = CircuitConfig::standard_recursion_zk_config();
+        // A high-rate recursive proof, designed to be verifiable with fewer routed wires.
+        let high_rate_config = CircuitConfig {
+            fri_config: FriConfig {
+                rate_bits: 7,
+                proof_of_work_bits: 16,
+                num_query_rounds: 12,
+                ..standard_config.fri_config.clone()
+            },
+            ..standard_config
+        };
+        // A final proof, optimized for size.
+        let final_config = CircuitConfig {
+            num_routed_wires: 65,
+            fri_config: FriConfig {
+                rate_bits: 8,
+                cap_height: 0,
+                proof_of_work_bits: 20,
+                reduction_strategy: FriReductionStrategy::MinSize(None),
+                num_query_rounds: 10,
+            },
+            ..high_rate_config
+        };
+
+        final_config
+    } else {
+        CircuitConfig::standard_recursion_zk_config()
+    };
+
     let mut builder = CircuitBuilder::<F, D>::new(config);
     
     // SHA256 Proof Segment
@@ -66,33 +89,18 @@ pub fn prove(jwt: &[u8], credential: &[u8]) -> Result<(Vec<u8>, Vec<u8>, [u8; 32
     }
 
     for i in 0..jwt_size {
-        pw.set_target(target_inclusion.jwt[i], F::from_canonical_usize(jwt[i] as usize));
+        pw.set_target(target_inclusion.jwt[i], F::from_canonical_u8(jwt[i] as u8));
     }
     for i in 0..credential_size {
-        pw.set_target(target_inclusion.credential[i], F::from_canonical_usize(credential[i] as usize));
+        pw.set_target(target_inclusion.credential[i], F::from_canonical_u8(credential[i] as u8));
     }
 
-    for i in 0..expected_hash_jwt.len() {
-        if expected_hash_jwt[i] {
-            builder.assert_one(targets_sha256_jwt.digest[i].target);
-        } else {
-            builder.assert_zero(targets_sha256_jwt.digest[i].target);
-        }
-    }
-
-    for i in 0..expected_hash_credential.len() {
-        if expected_hash_credential[i] {
-            builder.assert_one(targets_sha256_credential.digest[i].target);
-        } else {
-            builder.assert_zero(targets_sha256_credential.digest[i].target);
-        }
-    }
-    for i in 0..expected_hash_jwt.len() {
-        builder.register_public_input(targets_sha256_jwt.digest[i].target);
-    }
-
-    for i in 0..expected_hash_credential.len() {
-        builder.register_public_input(targets_sha256_credential.digest[i].target);
+    for i in 0..8 {
+        pw.set_u32_target(targets_sha256_jwt.digest[i], expected_hash_jwt[i]);
+        pw.set_u32_target(targets_sha256_credential.digest[i], expected_hash_credential[i]);
+        
+        builder.register_public_input(targets_sha256_jwt.digest[i].0);
+        builder.register_public_input(targets_sha256_credential.digest[i].0);
     }
     /* END CIRCUIT CONSTRUCTION */
 
@@ -113,6 +121,7 @@ pub fn prove(jwt: &[u8], credential: &[u8]) -> Result<(Vec<u8>, Vec<u8>, [u8; 32
     /* Prove */
     let timing = TimingTree::new("prove", Level::Info);
     let proof = data.prove(pw)?;
+    log::info!("Public Inputs {:?}", proof.public_inputs);
     timing.print();
     let (jwt_sha256_hash, credential_sha256_hash) = extract_hashes_from_public_inputs(&proof.public_inputs);
 

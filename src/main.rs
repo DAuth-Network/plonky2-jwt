@@ -12,7 +12,6 @@ fn main() -> Result<()> {
     builder.try_init()?;
 
    {
-
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
@@ -20,7 +19,7 @@ fn main() -> Result<()> {
         let jwt = "{\"iss\":\"https://dev-9h47ajc9.us.au111th0666.com/\",\"sub\":\"twitter|33783412\",\"aud\":\"T15e646b4uhAryyoj4GNRon6zs4MrHFV\",\"iat\":1639173028,\"exp\":1639209028,\"nonce\":\"44017a89\"}";
         let credential = "twitter|33783412";
 
-        let (verifier, proof, jwt_hash, credential_hash) = prove(&jwt.as_bytes(), &credential.as_bytes()).expect("fail to proof");
+        let (verifier, proof, jwt_hash, credential_hash) = prove(&jwt.as_bytes(), &credential.as_bytes(), false).expect("fail to proof");
 
         log::info!("verifier len: {:?} - proof len: {:?}", verifier.len(), proof.len());
         log::info!("jwt hash: {:?} - credential hash: {:?}", hex::encode(&jwt_hash), hex::encode(&credential_hash));
